@@ -1,110 +1,86 @@
-"""
-FCN
-"""
+from dataset import VOCDataSet
+import matplotlib.pyplot as plt
 import torch
-from torch.autograd import Variable
-from torch.utils.data import DataLoader
+from torch.utils import data
+from torchvision.utils import make_grid
+import PIL.Image as Image
+from transform import ReLabel, ToLabel, ToSP, Scale, Colorize
+from torchvision.transforms import Compose, Normalize, ToTensor
+from myfunc import make_image_grid, make_label_grid
+from criterion import CrossEntropyLoss2d
+from resnet import resnet101
+from torch.autograd.variable import Variable
+import gc
+from model import Seg
+import torch.nn.functional as F
+import pdb
+from tensorboard import SummaryWriter
+import os
+from datetime import datetime
 import torchvision
 
-from dataset import SBDClassSeg, MyTestData
-from transform import Colorize
-from criterion import CrossEntropyLoss2d
-from model import FCN8s
-from myfunc import imsave
+os.system('rm -rf ./runs/*')
+writer = SummaryWriter('./runs/'+datetime.now().strftime('%B%d  %H:%M:%S'))
 
-import visdom
-import numpy as np
-import argparse
-import os
+std = [.229, .224, .225]
+mean = [.485, .456, .406]
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--phase', type=str, default='train', help='train or test')
-parser.add_argument('--param', type=str, default=None, help='path to pre-trained parameters')
-parser.add_argument('--data', type=str, default='./train', help='path to input data')
-parser.add_argument('--out', type=str, default='./out', help='path to output data')
-opt = parser.parse_args()
-print(opt)
+input_transform = Compose([
+    Scale((256, 256), Image.BILINEAR),
+    ToTensor(),
+    Normalize(mean, std),
 
-vis = visdom.Visdom()
-win0 = vis.image(torch.zeros(3, 100, 100))
-win1 = vis.image(torch.zeros(3, 100, 100))
-win2 = vis.image(torch.zeros(3, 100, 100))
-win3 = vis.image(torch.zeros(3, 100, 100))
-color_transform = Colorize()
-"""parameters"""
-iterNum = 30
+])
+target_transform = Compose([
+    Scale((256, 256), Image.NEAREST),
+    ToSP(256),
+    ToLabel(),
+    ReLabel(255, 21),
+])
 
-"""data loader"""
-# dataRoot = '/media/xyz/Files/data/datasets'
-# checkRoot = '/media/xyz/Files/fcn8s-deconv'
-dataRoot = opt.data
-if not os.path.exists(opt.out):
-    os.mkdir(opt.out)
-if opt.phase == 'train':
-    checkRoot = opt.out
-    loader = torch.utils.data.DataLoader(
-        SBDClassSeg(dataRoot, split='train', transform=True),
-        batch_size=1, shuffle=True, num_workers=4, pin_memory=True)
-else:
-    outputRoot = opt.out
-    loader = torch.utils.data.DataLoader(
-        MyTestData(dataRoot, transform=True),
-        batch_size=1, shuffle=True, num_workers=4, pin_memory=True)
 
-"""nets"""
-model = FCN8s()
-if opt.param is None:
-    vgg16 = torchvision.models.vgg16(pretrained=True)
-    model.copy_params_from_vgg16(vgg16, copy_fc8=False, init_upscore=True)
-else:
-    model.load_state_dict(torch.load(opt.param))
+loader = data.DataLoader(VOCDataSet("/home/zeng/data/datasets/segmentation_Dataset",
+                                    img_transform=input_transform,
+                                    label_transform=target_transform),
+                                batch_size=12, shuffle=True, pin_memory=True)
 
-criterion = CrossEntropyLoss2d()
-optimizer = torch.optim.Adam(model.parameters(), 0.0001, betas=(0.5, 0.999))
+res101 = resnet101(pretrained=True).cuda()
+seg = Seg().cuda()
 
-model = model.cuda()
+weight = torch.ones(22)
+weight[21] = 0
 
-if opt.phase == 'train':
-    """train"""
-    for it in range(iterNum):
-        epoch_loss = []
-        for ib, data in enumerate(loader):
-            inputs = Variable(data[0]).cuda()
-            targets = Variable(data[1]).cuda()
-            model.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
-            epoch_loss.append(loss.data[0])
-            loss.backward()
-            optimizer.step()
-            if ib % 2 == 0:
-                image = inputs[0].data.cpu()
-                image[0] = image[0] + 122.67891434
-                image[1] = image[1] + 116.66876762
-                image[2] = image[2] + 104.00698793
-                title = 'input (epoch: %d, step: %d)' % (it, ib)
-                vis.image(image, win=win1, env='fcn', opts=dict(title=title))
-                title = 'output (epoch: %d, step: %d)' % (it, ib)
-                vis.image(color_transform(outputs[0].cpu().max(0)[1].data),
-                          win=win2, env='fcn', opts=dict(title=title))
-                title = 'target (epoch: %d, step: %d)' % (it, ib)
-                vis.image(color_transform(targets.cpu().data),
-                          win=win3, env='fcn', opts=dict(title=title))
-                average = sum(epoch_loss) / len(epoch_loss)
-                print('loss: %.4f (epoch: %d, step: %d)' % (loss.data[0], it, ib))
-                epoch_loss.append(average)
-                x = np.arange(1, len(epoch_loss) + 1, 1)
-                title = 'loss (epoch: %d, step: %d)' % (it, ib)
-                vis.line(np.array(epoch_loss), x, env='fcn', win=win0,
-                         opts=dict(title=title))
-        filename = ('%s/FCN-epoch-%d-step-%d.pth' \
-                    % (checkRoot, it, ib))
-        torch.save(model.state_dict(), filename)
-        print('save: (epoch: %d, step: %d)' % (it, ib))
-else:
-    for ib, data in enumerate(loader):
-        print('testing batch %d' % ib)
-        inputs = Variable(data[0]).cuda()
-        outputs = model(inputs)
-        hhh = color_transform(outputs[0].cpu().max(0)[1].data)
-        imsave(os.path.join(outputRoot, data[1][0] + '.png'), hhh)
+criterion = CrossEntropyLoss2d(weight.cuda())
+
+optimizer_seg = torch.optim.Adam(seg.parameters(), lr=1e-3)
+optimizer_feat = torch.optim.Adam(res101.parameters(), lr=1e-4)
+
+for t in range(10):
+    for i, (img, label) in enumerate(loader):
+        img = img.cuda()
+        label = label[0].cuda()
+        label = Variable(label)
+        input = Variable(img)
+
+        feats = res101(input)
+        output = seg(feats)
+
+        seg.zero_grad()
+        res101.zero_grad()
+        loss = criterion(output, label)
+        loss.backward()
+        optimizer_feat.step()
+        optimizer_seg.step()
+
+        ## see
+        input = make_image_grid(img, mean, std)
+        label = make_label_grid(label.data)
+        label = Colorize()(label).type(torch.FloatTensor)
+        output = make_label_grid(torch.max(output, dim=1)[1].data)
+        output = Colorize()(output).type(torch.FloatTensor)
+        writer.add_image('image', input, i)
+        writer.add_image('label', label, i)
+        writer.add_image('pred', output, i)
+        writer.add_scalar('loss', loss.data[0], i)
+
+        print "epoch %d step %d, loss=%.4f" %(t, i, loss.data.cpu()[0])

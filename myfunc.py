@@ -1,22 +1,13 @@
-import numpy as np
-import matplotlib.pyplot as plt
-import torch
+from torchvision.utils import make_grid
 
 
-def imsave(file_name, img):
-    """
-    save a torch tensor as an image
-    :param file_name: 'image/folder/image_name'
-    :param img: 3*h*w torch tensor
-    :return: nothing
-    """
-    assert(type(img) == torch.FloatTensor,
-           'img must be a torch.FloatTensor')
-    ndim = len(img.size())
-    assert(ndim == 2 or ndim == 3,
-           'img must be a 2 or 3 dimensional tensor')
-    img = img.numpy()
-    if ndim == 3:
-        plt.imsave(file_name, np.transpose(img, (1, 2, 0)))
-    else:
-        plt.imsave(file_name, img, cmap='gray')
+def make_image_grid(img, mean, std):
+    img = make_grid(img)
+    for i in range(3):
+        img[i] *= std[i]
+        img[i] += mean[i]
+    return img
+
+def make_label_grid(label):
+    label = make_grid(label.unsqueeze(1).expand(-1, 3, -1, -1))[0:1]
+    return label

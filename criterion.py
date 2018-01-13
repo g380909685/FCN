@@ -1,13 +1,11 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-
+import torch.nn as nn
+# Recommend
 class CrossEntropyLoss2d(nn.Module):
+    def __init__(self, weight=None, size_average=True):
+        super(CrossEntropyLoss2d, self).__init__()
+        self.nll_loss = nn.NLLLoss2d(weight, size_average)
 
-    def __init__(self, weight=None):
-        super(CrossEntropyLoss2d,self).__init__()
-
-        self.loss = nn.NLLLoss2d(weight)
-
-    def forward(self, outputs, targets):
-        return self.loss(F.log_softmax(outputs), targets)
+    def forward(self, inputs, targets):
+        return self.nll_loss(F.log_softmax(inputs), targets)
