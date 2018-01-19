@@ -83,4 +83,4 @@ for t in range(10):
         writer.add_image('pred', output, i)
         writer.add_scalar('loss', loss.data[0], i)
 
-        print "epoch %d step %d, loss=%.4f" %(t, i, loss.data.cpu()[0])
+        print ("epoch %d step %d, loss=%.4f" %(t, i, loss.data.cpu()[0]))
